@@ -1,9 +1,12 @@
 // app/api/ask/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getAI, EMBED_MODEL, CHAT_MODEL, EMBED_DIM } from "@/lib/gemini";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import { findGolden } from "@/lib/golden";
 import type { AskResponse } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 const SYSTEM = `You are Budget Lens, a civic assistant that explains Kenyan county budgets in plain language.
 
@@ -27,6 +30,7 @@ export async function POST(req: NextRequest) {
     if (golden) return NextResponse.json(golden);
 
     const ai = getAI();
+    const supabase = getSupabase();
 
     const embRes = await ai.models.embedContent({
       model: EMBED_MODEL,

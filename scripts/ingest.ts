@@ -3,13 +3,10 @@ import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
-import { createClient } from "@supabase/supabase-js";
+import { getSupabase } from "../lib/supabase";
 import { getAI, EMBED_MODEL, EMBED_DIM } from "../lib/gemini";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_KEY!
-);
+const supabase = getSupabase();
 
 const MAX_CHARS = 1200;
 const OVERLAP = 200;
