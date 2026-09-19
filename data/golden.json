@@ -1,0 +1,22 @@
+[
+  {
+    "id": "nairobi-health-2025",
+    "keywords": ["health", "afya", "hospital", "clinic", "medical"],
+    "county": "Nairobi",
+    "fiscalYear": "2025/26",
+    "answer": "Nairobi County allocated KES 12.4 billion to the Health Services sector in FY 2025/26 — about 21% of the total county budget. The largest share (KES 6.1B) goes to curative and rehabilitative health services, followed by preventive and promotive health (KES 4.3B).",
+    "sources": [
+      { "doc": "PBB Nairobi 2025/26", "page": 42, "snippet": "Health Services Sector — total allocation KES 12,400,000,000" }
+    ]
+  },
+  {
+    "id": "nairobi-water-2025-sw",
+    "keywords": ["maji", "water", "maji safi", "sewage"],
+    "county": "Nairobi",
+    "fiscalYear": "2025/26",
+    "answer": "Serikali ya Kaunti ya Nairobi imetenga KES 3.8 bilioni kwa sekta ya maji na uondoaji wa maji taka katika mwaka wa fedha 2025/26. Kiasi kikubwa (KES 2.4B) kinaenda kwa ukarabati wa mifumo ya usambazaji wa maji.",
+    "sources": [
+      { "doc": "PBB Nairobi 2025/26", "page": 58, "snippet": "Water and Sewerage — KES 3,800,000,000" }
+    ]
+  }
+]

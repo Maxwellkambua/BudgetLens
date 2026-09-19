@@ -1,0 +1,11 @@
+/* app/globals.css */
+@import "tailwindcss";
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: radial-gradient(1200px 600px at 50% -10%, #172554 0%, #0b1220 60%);
+}
