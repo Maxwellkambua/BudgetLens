@@ -1,11 +1,70 @@
 /* app/globals.css */
 @import "tailwindcss";
 
+@theme inline {
+  --font-display: var(--font-fraunces);
+  --font-sans: var(--font-inter);
+
+  --color-paper: #faf7f0;
+  --color-cream: #f4eee0;
+  --color-ink: #14100c;
+  --color-ink-2: #4a4338;
+  --color-muted: #8a8272;
+  --color-border: #e8e1d0;
+  --color-border-strong: #d6cdb6;
+
+  --color-primary: #0f4d3a;
+  --color-primary-2: #0a3d2d;
+  --color-primary-soft: #e6efe9;
+
+  --color-accent: #a86b12;
+  --color-accent-soft: #f7eed8;
+}
+
 html,
 body {
   height: 100%;
 }
 
 body {
-  background: radial-gradient(1200px 600px at 50% -10%, #172554 0%, #0b1220 60%);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.font-display {
+  font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+  font-optical-sizing: auto;
+  letter-spacing: -0.01em;
+}
+
+/* Thin, quiet scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 999px;
+  border: 3px solid var(--color-paper);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Blinking caret for the loading state */
+@keyframes bl-caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.bl-caret {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  vertical-align: -2px;
+  background: var(--color-primary);
+  animation: bl-caret 1s steps(1) infinite;
+  margin-left: 2px;
 }

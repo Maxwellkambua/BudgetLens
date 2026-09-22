@@ -1,16 +1,31 @@
 // components/SourceCard.tsx
 import type { Source } from "@/lib/types";
 
-export function SourceCard({ source }: { source: Source }) {
+export function SourceCard({
+  source,
+  index,
+}: {
+  source: Source;
+  index: number;
+}) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-      <div className="mb-1 flex items-center gap-2 text-xs">
-        <span className="rounded bg-cyan-950 px-2 py-0.5 font-medium text-cyan-400">
-          {source.doc}
-        </span>
-        <span className="text-slate-500">page {source.page}</span>
+    <li className="group flex gap-3.5 rounded-xl border border-border/80 bg-white/60 p-3.5 transition hover:border-border-strong hover:bg-white">
+      <div className="mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-border bg-paper font-sans text-[10.5px] font-semibold text-muted">
+        {index}
       </div>
-      <p className="text-xs leading-relaxed text-slate-400">{source.snippet}</p>
-    </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <span className="font-display text-[13.5px] font-semibold tracking-tight text-ink">
+            {source.doc}
+          </span>
+          <span className="text-[11px] uppercase tracking-[0.12em] text-muted">
+            p. {source.page}
+          </span>
+        </div>
+        <p className="mt-1 line-clamp-3 text-[12.5px] leading-relaxed text-muted">
+          {source.snippet}
+        </p>
+      </div>
+    </li>
   );
 }
