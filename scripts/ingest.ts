@@ -10,7 +10,8 @@ const supabase = getSupabase();
 
 const MAX_CHARS = 1200;
 const OVERLAP = 200;
-const BATCH = 10;
+const SLEEP_MS = 400;
+const MAX_RETRIES = 4;
 
 type Meta = {
   doc_id: string;
@@ -49,85 +50,147 @@ function splitChunks(text: string): string[] {
   return chunks;
 }
 
-async function embedBatch(texts: string[]): Promise<(number[] | null)[]> {
-  const ai = getAI();
-  const out: (number[] | null)[] = [];
+async function getExistingPages(doc_id: string): Promise<Set<number>> {
+  const { data, error } = await supabase
+    .from("chunks")
+    .select("page")
+    .eq("doc_id", doc_id);
 
-  for (let i = 0; i < texts.length; i++) {
-    const t = texts[i];
+  if (error) throw error;
+  return new Set((data ?? []).map((r: any) => r.page));
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function embedWithRetry(text: string): Promise<number[] | null> {
+  const ai = getAI();
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const res = await ai.models.embedContent({
         model: EMBED_MODEL,
-        contents: t,
+        contents: text,
         config: { outputDimensionality: EMBED_DIM },
       });
       const vec = res.embeddings?.[0]?.values;
-      if (!vec || vec.length !== EMBED_DIM) {
-        console.warn(`\n  ⚠ chunk ${i} returned bad vector (len=${vec?.length})`);
-        out.push(null);
-      } else {
-        out.push(vec);
-      }
+      if (!vec || vec.length !== EMBED_DIM) return null;
+      return vec;
     } catch (err: any) {
       const msg =
         err?.message ??
         err?.error?.message ??
         (typeof err === "object" ? JSON.stringify(err) : String(err));
-      console.warn(`\n  ⚠ chunk ${i} failed: ${String(msg).slice(0, 120)}`);
-      console.warn(`     text preview: ${t.slice(0, 80)}`);
-      out.push(null);
-    }
-    await new Promise((r) => setTimeout(r, 120));
-  }
+      const isRateLimit =
+        String(msg).includes("429") ||
+        String(msg).toLowerCase().includes("quota") ||
+        String(msg).toLowerCase().includes("rate");
 
-  return out;
+      if (!isRateLimit || attempt === MAX_RETRIES) {
+        if (isRateLimit) {
+          console.warn(
+            `\n  🛑 daily quota exhausted — stopping. Enable billing or retry tomorrow.`
+          );
+          throw new Error("QUOTA_EXHAUSTED");
+        }
+        console.warn(`\n  ⚠ embed failed: ${String(msg).slice(0, 120)}`);
+        return null;
+      }
+
+      const backoff = 2000 * Math.pow(2, attempt);
+      process.stdout.write(`  ⏸  rate limited, waiting ${backoff / 1000}s…\r`);
+      await sleep(backoff);
+    }
+  }
+  return null;
 }
 
 async function ingest(file: string, meta: Meta) {
-  console.log(`\n→ ${path.basename(file)}`);
+  console.log(`\n→ ${path.basename(file)}  [${meta.county} ${meta.doc_type}]`);
   const pages = await extractPages(file);
-  console.log(`  ${pages.length} pages`);
+  console.log(`  ${pages.length} pages total`);
+
+  const existing = await getExistingPages(meta.doc_id);
+  if (existing.size > 0) {
+    console.log(`  ${existing.size} pages already in DB`);
+  }
 
   const rows: any[] = [];
   pages.forEach((pageText, idx) => {
+    const pageNum = idx + 1;
+    if (existing.has(pageNum)) return;
     if (pageText.length < 80) return;
     splitChunks(pageText).forEach((content, ci) => {
-      rows.push({ ...meta, page: idx + 1, chunk_index: ci, content });
+      rows.push({ ...meta, page: pageNum, chunk_index: ci, content });
     });
   });
-  console.log(`  ${rows.length} chunks`);
+
+  console.log(`  ${rows.length} new chunks to embed`);
 
   if (rows.length === 0) {
-    console.warn(`  ⚠ 0 chunks — PDF may be scanned, skipping`);
+    console.log(`  ✓ nothing to do`);
     return;
   }
 
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const batch = rows.slice(i, i + BATCH);
-    const vectors = await embedBatch(batch.map((r) => r.content));
+  let ok = 0;
+  let skipped = 0;
 
-    const good = batch
-      .map((r, j) => ({ ...r, embedding: vectors[j] }))
-      .filter((r) => r.embedding !== null);
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    let vec: number[] | null = null;
 
-    if (good.length === 0) {
-      process.stdout.write(
-        `  ${Math.min(i + BATCH, rows.length)}/${rows.length} (all skipped)\r`
-      );
-      continue;
+    try {
+      vec = await embedWithRetry(r.content);
+    } catch (e: any) {
+      if (e?.message === "QUOTA_EXHAUSTED") {
+        console.log(
+          `\n  ⛔ stopping at chunk ${i}/${rows.length} (page ${r.page})`
+        );
+        console.log(
+          `  💡 re-run this script after quota reset — it will resume from here`
+        );
+        throw e;
+      }
+      throw e;
     }
 
-    const { error } = await supabase.from("chunks").insert(good);
-    if (error) {
-      console.error(`\n  ❌ insert failed at chunk ${i}:`, error.message);
-      throw error;
+    if (vec === null) {
+      skipped++;
+    } else {
+      const { error } = await supabase
+        .from("chunks")
+        .insert({ ...r, embedding: vec });
+      if (error) {
+        console.error(`\n  ❌ insert failed at ${i}:`, error.message);
+      } else {
+        ok++;
+      }
     }
 
-    process.stdout.write(`  ${Math.min(i + BATCH, rows.length)}/${rows.length}\r`);
+    const pct = Math.round(((i + 1) / rows.length) * 100);
+    process.stdout.write(
+      `  ${i + 1}/${rows.length} (${pct}%)  ok=${ok} skipped=${skipped}\r`
+    );
+
+    await sleep(SLEEP_MS);
   }
-  console.log(`  ✓ done`);
+
+  console.log(`\n  ✓ done — ${ok} inserted, ${skipped} skipped`);
 }
 
+// ============================================================
+// DOCUMENT REGISTRY
+//
+// Four documents currently ingested:
+//   - Nairobi CFSP 2025/26   (complete)
+//   - Kisumu Budget 2025/26  (partial — resumes on re-run)
+//   - Narok CFSP 2025/26     (new)
+//   - Nyandarua CFSP 2025/26 (new)
+//
+// Add new entries by dropping the PDF into data/pdfs/ and adding
+// a matching entry below. Missing files are skipped automatically.
+// ============================================================
 const DOCS: Array<[string, Meta]> = [
   [
     "data/pdfs/nairobi-cfsp-2025.pdf",
@@ -147,26 +210,64 @@ const DOCS: Array<[string, Meta]> = [
       doc_type: "BUDGET",
     },
   ],
+  [
+    "data/pdfs/narok-cfsp-2025.pdf",
+    {
+      doc_id: "narok-cfsp-2025",
+      county: "Narok",
+      fiscal_year: "2025/26",
+      doc_type: "CFSP",
+    },
+  ],
+  [
+    "data/pdfs/nyandarua-cfsp-2025.pdf",
+    {
+      doc_id: "nyandarua-cfsp-2025",
+      county: "Nyandarua",
+      fiscal_year: "2025/26",
+      doc_type: "CFSP",
+    },
+  ],
 ];
 
+// ============================================================
+// MAIN
+// ============================================================
 (async () => {
+  const start = Date.now();
+  let processed = 0;
+  let skipped = 0;
+
   try {
     for (const [file, meta] of DOCS) {
       if (!fs.existsSync(file)) {
-        console.warn(`skip missing ${file}`);
+        console.warn(`\n⏭  skip missing: ${file}`);
+        skipped++;
         continue;
       }
       await ingest(file, meta);
+      processed++;
     }
-    console.log("\nall done");
+
+    const mins = ((Date.now() - start) / 60000).toFixed(1);
+    console.log(`\n────────────────────────────────────────────`);
+    console.log(`all done in ${mins} min`);
+    console.log(`  processed: ${processed} files`);
+    console.log(`  skipped:   ${skipped} files (not downloaded)`);
   } catch (e: any) {
-    console.error("\n❌ FATAL");
-    console.error("   message:", e?.message);
-    console.error("   status:", e?.status);
-    console.error(
-      "   raw:",
-      JSON.stringify(e, Object.getOwnPropertyNames(e ?? {}), 2)
-    );
+    if (e?.message === "QUOTA_EXHAUSTED") {
+      console.log(`\n────────────────────────────────────────────`);
+      console.log(`Stopped early due to Gemini quota.`);
+      console.log(`Re-run "npm run ingest" after the quota resets`);
+      console.log(`(or enable billing) — it will resume automatically.`);
+    } else {
+      console.error("\n❌ FATAL");
+      console.error("   message:", e?.message);
+      console.error(
+        "   raw:",
+        JSON.stringify(e, Object.getOwnPropertyNames(e ?? {}), 2)
+      );
+    }
     process.exit(1);
   }
 })();
