@@ -1,6 +1,6 @@
 // app/api/ask/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { getAI, EMBED_MODEL, CHAT_MODEL, EMBED_DIM } from "@/lib/gemini";
+import { getAI, EMBED_MODEL, EMBED_DIM } from "@/lib/gemini";
 import { getSupabase } from "@/lib/supabase";
 import { findGolden } from "@/lib/golden";
 import type { AskResponse } from "@/lib/types";
@@ -21,8 +21,15 @@ function rateLimited(ip: string): boolean {
   return recent.length > MAX_PER_WINDOW;
 }
 
+// ---- Models to try in order ----
+// If one is busy (503), fall through to the next.
+const CHAT_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+];
+
 // ---- Counties currently ingested ----
-// Keep in sync with components/AskBox.tsx and the ingest DOCS array.
 const KNOWN_COUNTIES = ["Nairobi", "Kisumu", "Narok", "Nyandarua"];
 
 const SYSTEM = `You are Budget Lens, a civic assistant that explains Kenyan county budgets in plain language.
@@ -36,9 +43,49 @@ RULES:
 - If asked about a ward or sub-county, state only what the document actually says. Never invent ward-level figures.
 - Default to under 150 words. Expand only if asked.`;
 
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Try each model in order, retry twice per model on 503.
+async function generateWithFallback(prompt: string): Promise<string> {
+  const ai = getAI();
+  let lastError: any = null;
+
+  for (const model of CHAT_MODELS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const chat = await ai.models.generateContent({
+          model,
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          config: { temperature: 0.1 },
+        });
+        const answer =
+          chat.text ??
+          chat.candidates?.[0]?.content?.parts
+            ?.map((p: any) => p.text)
+            .join("") ??
+          "";
+        if (answer.trim()) return answer;
+      } catch (e: any) {
+        lastError = e;
+        const status = e?.status ?? e?.error?.code;
+        const isTransient =
+          status === 503 ||
+          status === 429 ||
+          String(e?.message ?? "").includes("high demand") ||
+          String(e?.message ?? "").includes("UNAVAILABLE");
+        if (!isTransient) break;
+        await sleep(800 * (attempt + 1));
+      }
+    }
+  }
+
+  throw lastError ?? new Error("all models failed");
+}
+
 export async function POST(req: NextRequest) {
   try {
-    // ---- Rate limit ----
     const ip =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
       req.headers.get("x-real-ip") ??
@@ -51,52 +98,40 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ---- Parse input ----
     const { question, county, fiscalYear } = await req.json();
     if (!question?.trim()) {
       return NextResponse.json({ error: "question required" }, { status: 400 });
     }
 
-    // ---- Auto-switch county if the question names one ----
+    // Auto-switch county if the question names one
     const mentioned = KNOWN_COUNTIES.find((c) =>
       new RegExp(`\\b${c}\\b`, "i").test(question)
     );
     const effectiveCounty =
       mentioned && mentioned !== county ? mentioned : county;
 
-    // TEMP DIAGNOSTIC — remove once county switching is confirmed
-    console.log("COUNTY DEBUG:", {
-      question,
-      countyFromClient: county,
-      fiscalYearFromClient: fiscalYear,
-      mentioned: mentioned ?? null,
-      effectiveCounty,
-    });
-
-    // ---- Golden path (hand-verified answers) ----
+    // Golden path
     const golden = findGolden(question, effectiveCounty, fiscalYear);
     if (golden) return NextResponse.json(golden);
 
-    // ---- Embed query ----
     const ai = getAI();
     const supabase = getSupabase();
 
+    // Embed
     const embRes = await ai.models.embedContent({
       model: EMBED_MODEL,
       contents: question,
       config: { outputDimensionality: EMBED_DIM },
     });
     const queryVector = embRes.embeddings?.[0]?.values;
-
     if (!queryVector) {
-      console.error("ask route: embedding returned no vector");
       return NextResponse.json(
         { error: "Something went wrong while answering. Please try again." },
         { status: 500 }
       );
     }
 
-    // ---- Vector search ----
+    // Search
     const { data: matches, error: rpcError } = await supabase.rpc(
       "match_chunks",
       {
@@ -115,10 +150,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // TEMP DIAGNOSTIC — how many chunks came back
-    console.log("MATCH COUNT:", matches?.length ?? 0, "for filter:", effectiveCounty);
-
-    // ---- No matches: build a live "what's indexed" message ----
+    // No matches — dynamic list
     if (!matches || matches.length === 0) {
       const { data: coverage } = await supabase
         .from("chunks")
@@ -140,14 +172,12 @@ export async function POST(req: NextRequest) {
           ? ` Currently indexed: ${docs.join(", ")}.`
           : " No documents are currently indexed.";
 
-      const payload: AskResponse = {
+      return NextResponse.json({
         answer: `I couldn't find anything about that in the ingested documents.${suffix}`,
         sources: [],
-      };
-      return NextResponse.json(payload);
+      });
     }
 
-    // ---- Build context ----
     const context = matches
       .map(
         (m: any) =>
@@ -155,37 +185,11 @@ export async function POST(req: NextRequest) {
       )
       .join("\n\n---\n\n");
 
-    // ---- Generate answer ----
-    const chat = await ai.models.generateContent({
-      model: CHAT_MODEL,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              text: `${SYSTEM}\n\nCONTEXT:\n${context}\n\nQUESTION: ${question}`,
-            },
-          ],
-        },
-      ],
-      config: { temperature: 0.1 },
-    });
+    const answer = await generateWithFallback(
+      `${SYSTEM}\n\nCONTEXT:\n${context}\n\nQUESTION: ${question}`
+    );
 
-    const answer =
-      chat.text ??
-      chat.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ??
-      "";
-
-    if (!answer.trim()) {
-      console.error("ask route: model returned empty response");
-      return NextResponse.json(
-        { error: "Something went wrong while answering. Please try again." },
-        { status: 500 }
-      );
-    }
-
-    // ---- Respond ----
-    const payload: AskResponse = {
+    return NextResponse.json({
       answer,
       sources: matches.map((m: any) => ({
         doc: `${m.doc_type} ${m.county} ${m.fiscal_year}`,
@@ -193,25 +197,21 @@ export async function POST(req: NextRequest) {
         snippet:
           m.content.slice(0, 180) + (m.content.length > 180 ? "…" : ""),
       })),
-    };
-
-    return NextResponse.json(payload);
+    });
   } catch (e: any) {
     console.error("ask route error:", e);
-
     const msg =
       e?.message ??
       e?.error?.message ??
       (typeof e === "object" ? JSON.stringify(e) : String(e));
 
-    const isConfigError =
-      String(msg).includes("GEMINI_API_KEY") ||
-      String(msg).includes("SUPABASE_") ||
-      String(msg).includes("is not set") ||
-      String(msg).includes("is required");
+    const isBusy =
+      e?.status === 503 ||
+      String(msg).includes("high demand") ||
+      String(msg).includes("UNAVAILABLE");
 
-    const userMessage = isConfigError
-      ? "Service is temporarily unavailable. Please try again shortly."
+    const userMessage = isBusy
+      ? "The AI service is busy right now. Please try again in a few seconds."
       : "Something went wrong while answering. Please try again.";
 
     return NextResponse.json({ error: userMessage }, { status: 500 });
