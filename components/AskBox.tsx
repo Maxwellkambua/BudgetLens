@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // -----------------------------------------------------------
 // Config
 // -----------------------------------------------------------
+// Keep in sync with app/api/ask/route.ts and the ingest DOCS array.
 const COUNTIES = ["Nairobi", "Kisumu", "Narok", "Nyandarua"];
 const FISCAL_YEARS = ["2025/26"];
 
@@ -42,7 +43,7 @@ const ROTATING_PLACEHOLDERS = [
 
 const SWAHILI_MARKERS = [
   "pesa", "ngapi", "shilingi", "afya", "elimu", "maji", "kilimo",
-  "barabara", "je", "ni", "kwa", "ya", "za", "wa", "kwa", "wananchi",
+  "barabara", "je", "ni", "kwa", "ya", "za", "wa", "wananchi",
 ];
 
 function detectSwahili(text: string): boolean {
@@ -184,7 +185,6 @@ export function AskBox({
     const useCounty = overrideCounty ?? county;
     onSubmit(value, useCounty, fy);
 
-    // Save to recent (functional update to avoid stale closure)
     setRecent((prev) => {
       const entry: Recent = { q: value, county: useCounty, fy };
       const next = [entry, ...prev.filter((r) => r.q !== value)].slice(0, 4);
