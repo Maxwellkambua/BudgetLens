@@ -21,6 +21,10 @@ function rateLimited(ip: string): boolean {
   return recent.length > MAX_PER_WINDOW;
 }
 
+// ---- Counties currently ingested ----
+// Keep in sync with components/AskBox.tsx and the ingest DOCS array.
+const KNOWN_COUNTIES = ["Nairobi", "Kisumu", "Narok", "Nyandarua"];
+
 const SYSTEM = `You are Budget Lens, a civic assistant that explains Kenyan county budgets in plain language.
 
 RULES:
@@ -34,24 +38,6 @@ RULES:
 
 export async function POST(req: NextRequest) {
   try {
-    // ============================================================
-    // TEMP DIAGNOSTIC — remove this block once env vars are confirmed
-    // ============================================================
-    console.log("ENV DIAGNOSTIC:", {
-      keysMatchingGemini: Object.keys(process.env).filter((k) =>
-        k.toUpperCase().includes("GEMINI")
-      ),
-      geminiValueLen: process.env.GEMINI_API_KEY?.length ?? 0,
-      geminiPrefix: process.env.GEMINI_API_KEY?.slice(0, 6) ?? null,
-      hasSupabaseUrl: !!process.env.SUPABASE_URL,
-      hasSupabaseKey: !!process.env.SUPABASE_SERVICE_KEY,
-      vercelEnv: process.env.VERCEL_ENV,
-      nodeEnv: process.env.NODE_ENV,
-    });
-    // ============================================================
-    // END TEMP DIAGNOSTIC
-    // ============================================================
-
     // ---- Rate limit ----
     const ip =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
@@ -71,8 +57,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "question required" }, { status: 400 });
     }
 
+    // ---- Auto-switch county if the question names one ----
+    // If a user has Nairobi selected but asks about Narok, use Narok.
+    const mentioned = KNOWN_COUNTIES.find((c) =>
+      new RegExp(`\\b${c}\\b`, "i").test(question)
+    );
+    const effectiveCounty =
+      mentioned && mentioned !== county ? mentioned : county;
+
     // ---- Golden path (hand-verified answers) ----
-    const golden = findGolden(question, county, fiscalYear);
+    const golden = findGolden(question, effectiveCounty, fiscalYear);
     if (golden) return NextResponse.json(golden);
 
     // ---- Embed query ----
@@ -100,7 +94,7 @@ export async function POST(req: NextRequest) {
       {
         query_embedding: queryVector,
         match_count: 8,
-        filter_county: county ?? null,
+        filter_county: effectiveCounty ?? null,
         filter_fy: fiscalYear ?? null,
       }
     );
@@ -113,10 +107,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ---- No matches: build a live "what's indexed" message ----
     if (!matches || matches.length === 0) {
+      const { data: coverage } = await supabase
+        .from("chunks")
+        .select("county, doc_type");
+
+      const seen = new Set<string>();
+      const docs: string[] = [];
+      for (const row of coverage ?? []) {
+        const key = `${row.county}|${row.doc_type}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          docs.push(`${row.county} (${row.doc_type})`);
+        }
+      }
+      docs.sort();
+
+      const suffix =
+        docs.length > 0
+          ? ` Currently indexed: ${docs.join(", ")}.`
+          : " No documents are currently indexed.";
+
       const payload: AskResponse = {
-        answer:
-          "I couldn't find anything about that in the ingested documents. Currently indexed: Nairobi County Fiscal Strategy Paper 2025/26 and Kisumu Approved Budget Estimates 2025/26.",
+        answer: `I couldn't find anything about that in the ingested documents.${suffix}`,
         sources: [],
       };
       return NextResponse.json(payload);
