@@ -58,12 +58,20 @@ export async function POST(req: NextRequest) {
     }
 
     // ---- Auto-switch county if the question names one ----
-    // If a user has Nairobi selected but asks about Narok, use Narok.
     const mentioned = KNOWN_COUNTIES.find((c) =>
       new RegExp(`\\b${c}\\b`, "i").test(question)
     );
     const effectiveCounty =
       mentioned && mentioned !== county ? mentioned : county;
+
+    // TEMP DIAGNOSTIC — remove once county switching is confirmed
+    console.log("COUNTY DEBUG:", {
+      question,
+      countyFromClient: county,
+      fiscalYearFromClient: fiscalYear,
+      mentioned: mentioned ?? null,
+      effectiveCounty,
+    });
 
     // ---- Golden path (hand-verified answers) ----
     const golden = findGolden(question, effectiveCounty, fiscalYear);
@@ -106,6 +114,9 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
+
+    // TEMP DIAGNOSTIC — how many chunks came back
+    console.log("MATCH COUNT:", matches?.length ?? 0, "for filter:", effectiveCounty);
 
     // ---- No matches: build a live "what's indexed" message ----
     if (!matches || matches.length === 0) {

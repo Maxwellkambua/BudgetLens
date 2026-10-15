@@ -37,7 +37,7 @@ export default function Home() {
       const d = await r.json();
       if (!r.ok) {
         setResult({
-          answer: `⚠ ${d.error ?? "Unknown error"}`,
+          answer: `⚠ ${d.error ?? "Something went wrong."}`,
           sources: [],
         });
         return;
@@ -96,11 +96,11 @@ export default function Home() {
 
         {/* Meta strip */}
         <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] uppercase tracking-[0.16em] text-muted">
-          <span>2 documents</span>
+          <span>4 documents</span>
           <span className="h-1 w-1 rounded-full bg-border-strong" />
-          <span>560 chunks indexed</span>
+          <span>840 chunks indexed</span>
           <span className="h-1 w-1 rounded-full bg-border-strong" />
-          <span>Nairobi · Kisumu</span>
+          <span>Nairobi · Kisumu · Narok · Nyandarua</span>
         </div>
 
         {/* Loading skeleton */}
@@ -119,6 +119,7 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="mt-20 border-t border-border/70 pt-6 text-[12px] leading-relaxed text-muted">
+          Prototype for the OSF × Andela Hackathon 2026. Answers are drawn only
           from published county budget documents. Not legal or financial advice.
         </footer>
       </main>
